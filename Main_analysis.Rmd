@@ -1,0 +1,1421 @@
+---
+title: "prevalent_main_analysis_1015"
+author: "Mingzhou_Fu"
+date: "10/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Basic personal setups, message=FALSE, warning=FALSE}
+rm(list = ls())
+library(tidyverse)
+library(writexl)
+library(ggcorrplot)  
+library(compareGroups)
+library(MendelianRandomization)
+library(AER) # For MR instrumental testing
+library(sjlabelled)
+library(epiflow)
+library(pscl) # calculate pseudo r-square
+
+source_path = '/Users/Mingzhou/Desktop/Materials/General R/code/'
+work_data_path = '/Users/Mingzhou/Desktop/AD_Grant/Cholesterol/data/'
+output_path = '/Users/Mingzhou/Desktop/AD_Grant/Cholesterol/output/prevalent/'
+
+# Original dataset
+europ = 'prevalent_europ.rda'
+load(paste0(work_data_path, europ)) # -- N = 8,781
+load(paste0(work_data_path, 'prevalent_eligible.rda')) # N = 10,882
+attach(europ)
+```
+
+# Part 0: Univariate analysis/Make tertiles
+```{r Distribution check}
+# The distributions of DBS HDL/TC are a little bit right-skewed -- but not too much, consider not log-transformed for now
+hist(HDL)
+hist(TC)
+
+# Below is for sensitivity analysis -- Exclude those in AHEAD and CODA
+no_old_europ = 
+  europ %>% 
+  filter(STUDY != 11 & STUDY != 21)
+# N = 7,080
+```
+
+# Part 1: Univariate analysis: descriptive among ancestry 
+```{r}
+eligible_nolabel = remove_all_labels(final_sample)
+table_uni = descrTable(gen_ancestry ~ HDL_clinic_cat + TC_clinic_bin_cat + AD_cat + HDL + TC +
+                          age + sex_cat + education + wave_adj + med_lipid_cat +
+                          stroke_cat + APOE2010_cat + HTN_cat + diabetes_cat + smoking_cat + drinking_cat + proxy_cat +
+                          BMI + PGS_HDL + PGS_TC + PGS_AD_IGAP + PGS_AD_Kunkle + PGS_GENCOG +
+                          im_recall + dl_recall + total_recall + serial7 + backwc + vocab + ms_total + cog_total +
+                          PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E, eligible_nolabel, hide.no = "No", show.all = T)
+compareGroups::export2csv(table_uni, file = paste0(output_path, 'univariate_0708.csv'))
+```
+
+
+# Part 2: Bivariate analysis
+```{r Table1: bivariate, message=FALSE, warning=FALSE}
+eligible_nolabel_europ = remove_all_labels(europ)
+# Build table: 1. Cognitive status
+table1_cog = descrTable(AD_cat ~ HDL_clinic_cat + TC_clinic_bin_cat + 
+                          age + sex_cat + education + wave_adj + med_lipid_cat +
+                          stroke_cat + APOE2010_cat + HTN_cat + diabetes_cat + smoking_cat + drinking_cat + 
+                          BMI + PGS_HDL + PGS_TC + PGS_AD_IGAP + PGS_AD_Kunkle + PGS_GENCOG +
+                          im_recall + dl_recall + total_recall + serial7 + backwc + vocab + ms_total + cog_total, 
+                          eligible_nolabel_europ, hide.no = "No", show.all = T)
+compareGroups::export2csv(table1_cog, file = paste0(output_path, 'cognitive_europ_0708.csv'))
+# Build table: 2. HDL clinical level
+table1_hdl = descrTable(HDL_clinic_cat ~ AD_cat + TC_clinic_bin_cat + 
+                          age + sex_cat + education + wave_adj + med_lipid_cat +
+                          stroke_cat + APOE2010_cat + HTN_cat + diabetes_cat + smoking_cat + drinking_cat + 
+                          BMI + PGS_HDL + PGS_TC + PGS_AD_IGAP + PGS_AD_Kunkle + PGS_GENCOG +
+                          im_recall + dl_recall + total_recall + serial7 + backwc + vocab + ms_total + cog_total, 
+                          eligible_nolabel_europ, hide.no = "No", show.all = T)
+compareGroups::export2csv(table1_hdl, file = paste0(output_path, 'hdl_europ_0708.csv'))
+# Build table: 3. TC clinical level
+table1_tc = descrTable(TC_clinic_bin_cat ~ AD_cat + HDL_clinic_cat + 
+                          age + sex_cat + education + wave_adj + med_lipid_cat +
+                          stroke_cat + APOE2010_cat + HTN_cat + diabetes_cat + smoking_cat + drinking_cat + 
+                          BMI + PGS_HDL + PGS_TC + PGS_AD_IGAP + PGS_AD_Kunkle + PGS_GENCOG +
+                          im_recall + dl_recall + total_recall + serial7 + backwc + vocab + ms_total + cog_total, 
+                          eligible_nolabel_europ, hide.no = "No", show.all = T)
+compareGroups::export2csv(table1_tc, file = paste0(output_path, 'tc_europ_0708.csv'))
+```
+
+# Part 3: Logistic regression
+# ================================
+## HDL ~ Cognitive status
+## 1. Separate the full set into a subset that have complete exposure data (HDL)
+```{r Separate datasets, message=FALSE, warning=FALSE}
+# HDL sample
+hdl_sample = 
+  europ %>% 
+  dplyr::select(HHID, PN, AD_cat, HDL, PGS_HDL) %>% 
+  drop_na() %>% 
+  left_join(europ)
+# N = 7,869
+```
+
+## 2. Clinical HDL group and cognition
+### 1) Prepare datasets
+```{r}
+cind_normal = 
+  hdl_sample %>% 
+  dplyr::filter(AD_cat == "Normal" | AD_cat == "CIND") %>% 
+  mutate(AD_bin = case_when(
+    AD_cat == "Normal" ~ 0,
+    AD_cat == "CIND" ~ 1
+  ))
+# N = 7,707
+
+dementia_normal = 
+  hdl_sample %>% 
+  dplyr::filter(AD_cat == "Normal" | AD_cat == "Dementia") %>% 
+  mutate(AD_bin = case_when(
+    AD_cat == "Normal" ~ 0,
+    AD_cat == "Dementia" ~ 1
+  ))
+# N = 6,926
+```
+
+### 2) Name models and adjusted variables
+```{r}
+lst_model = c('CIND_crude', 'Dem_crude', 'CIND_adj1', 'Dem_adj1', 'full_crude', 'full_adj1')
+gene_adj_basic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+# Function for improvement Chi-square
+G_square = function(L_full, L_reduced) {
+  output = 2*(L_full - L_reduced)
+}
+```
+
+### 3) Regression models
+#### A. PGS HDL and HDL group
+```{r message=FALSE, warning=FALSE}
+# Crude 
+crude = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+full_crude = glm(crude, data = hdl_sample, family = 'binomial')
+# pR2(full_crude)
+
+# Adding in demographic variables
+f1 = as.formula(paste('HDL_clinic ~ PGS_HDL + ', gene_adj_basic))
+# Reduced model
+f_reduced = as.formula(paste('HDL_clinic ~ ', gene_adj_basic))
+
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+CIND_reduced = glm(f_reduced, data = cind_normal, family = 'binomial')
+cind_G = G_square(logLik(CIND_adj1)[1], logLik(CIND_reduced)[1])
+print(paste0("CIND: ", round(cind_G, 2)))
+
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+Dem_reduced = glm(f_reduced, data = dementia_normal, family = 'binomial')
+dementia_G = G_square(logLik(Dem_adj1)[1], logLik(Dem_reduced)[1])
+print(paste0("Dementia: ", round(dementia_G, 2)))
+
+full_adj1 = glm(f1, data = hdl_sample, family = 'binomial')
+full_reduced = glm(f_reduced, data = hdl_sample, family = 'binomial')
+full_G = G_square(logLik(full_adj1)[1], logLik(full_reduced)[1])
+print(paste0("Full: ", round(full_G, 2)))
+# pR2(full_adj1)
+
+hdl_pgs = make_OR_table(lst_model, 2, 'hdl_pgs_')
+```
+
+#### B. HDL group and Cognitive Status
+##### 1) Try ordinal logistic regression
+```{r}
+library(MASS)
+# Relevel categorical variable -- change the order
+europ$AD_cat = factor(europ$AD_cat, levels = c("Normal", "CIND", "Dementia"))
+# fit ordered logit model and store results 'm'
+olm = polr(AD_cat ~ HDL_clinic + age + sex + education + wave_adj + med_lipid_cat + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E, data = europ, Hess = TRUE)
+# view a summary of the model
+summary(olm)
+```
+
+```{r}
+# Test for proportional odds assumption
+library(brant)
+brant(olm)
+```
+
+##### 2) Back to logistic regression
+```{r}
+lst_model = c('CIND_crude', 'Dem_crude', 'CIND_adj1', 'Dem_adj1', 'CIND_adj2', 'Dem_adj2', 'CIND_adj3', 'Dem_adj3')
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink + exercise')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+```
+
+```{r HDL and Cognitive status, message=FALSE, warning=FALSE}
+# Crude 
+crude = as.formula(paste('AD_bin ~ ', 'HDL_clinic'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ HDL_clinic + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ HDL_clinic + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ HDL_clinic + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+hdl_ad = make_OR_table(lst_model, 2, 'hdl_ad_')
+```
+
+#### C. Cognitive Status ~ HDL PGS + HDL group
+##### 1) Total effect
+```{r message=FALSE, warning=FALSE}
+# Crude
+crude = as.formula(paste('AD_bin ~ ', 'PGS_HDL'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ PGS_HDL + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ PGS_HDL + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ PGS_HDL + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+hdl_adpgs1_tot = make_OR_table(lst_model, 2, 'hdl_adpgs1_t_')
+```
+
+##### 2) Direct effect
+```{r HDL PGS and Cognitive status, message=FALSE, warning=FALSE}
+# Crude
+crude = as.formula(paste('AD_bin ~ ', 'PGS_HDL + HDL_clinic'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ PGS_HDL + HDL_clinic + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ PGS_HDL + HDL_clinic + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ PGS_HDL + HDL_clinic + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+hdl_adpgs1 = make_OR_table(lst_model, 2, 'hdl_adpgs1_')
+hdl_adpgs2 = make_OR_table(lst_model, 3, 'hdl_adpgs2_')
+```
+
+```{r}
+main_hdl = rbind(hdl_pgs, hdl_ad, hdl_adpgs1_tot, hdl_adpgs1, hdl_adpgs2)
+```
+
+#### D. Mendelian Randomization
+```{r}
+pc_only = 'PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink + exercise')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('AD_bin ~ ', 'PGS_HDL'))
+
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('AD_bin ~ PGS_HDL + ', demographic))
+f2_outcome = as.formula(paste('AD_bin ~ PGS_HDL + ', health_behavior))
+f3_outcome = as.formula(paste('AD_bin ~ PGS_HDL + ', gene_add))
+
+# CIND
+CIND_MR_1 = glm(f0_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_2 = glm(f0_outcome, data = cind_normal, family = 'binomial')
+CIND_crude_mr = get_MR_value(CIND_MR_1, CIND_MR_2, 'CIND_crude')
+
+CIND_MR_3 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_4 = glm(f1_outcome, data = cind_normal, family = 'binomial')
+CIND_adjust_mr = get_MR_value(CIND_MR_3, CIND_MR_4, 'CIND_adj')
+
+CIND_MR_5 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_6 = glm(f2_outcome, data = cind_normal, family = 'binomial')
+CIND_full_mr = get_MR_value(CIND_MR_5, CIND_MR_6, 'CIND_full')
+
+CIND_MR_7 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_8 = glm(f3_outcome, data = cind_normal, family = 'binomial')
+CIND_gene_mr = get_MR_value(CIND_MR_7, CIND_MR_8, 'CIND_gene')
+# Dementia
+Dem_MR_1 = glm(f0_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_2 = glm(f0_outcome, data = dementia_normal, family = 'binomial')
+Dem_crude_mr = get_MR_value(Dem_MR_1, Dem_MR_2, 'Dem_crude')
+
+Dem_MR_3 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_4 = glm(f1_outcome, data = dementia_normal, family = 'binomial')
+Dem_adjust_mr = get_MR_value(Dem_MR_3, Dem_MR_4, 'Dem_adj')
+
+Dem_MR_5 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_6 = glm(f2_outcome, data = dementia_normal, family = 'binomial')
+Dem_full_mr = get_MR_value(Dem_MR_5, Dem_MR_6, 'Dem_full')
+
+Dem_MR_7 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_8 = glm(f3_outcome, data = dementia_normal, family = 'binomial')
+Dem_gene_mr = get_MR_value(Dem_MR_7, Dem_MR_8, 'Dem_gene')
+
+# Bind together
+hdl_mr_bind = rbind(CIND_crude_mr, CIND_adjust_mr, CIND_full_mr, CIND_gene_mr,
+                Dem_crude_mr, Dem_adjust_mr, Dem_full_mr, Dem_gene_mr)
+hdl_mr_df = as.data.frame(hdl_mr_bind)
+colnames(hdl_mr_df) = c('mark', 'estimate', '95% CI', 'OR', '95% CI_OR', 'p-value')
+
+# Calculate z score (p for heterogen)
+convert.z.score <- function(z, one.sided = NULL) {
+    if(is.null(one.sided)) {
+        pval = pnorm(-abs(z));
+        pval = 2 * pval
+    } else if(one.sided=="-") {
+        pval = pnorm(z);
+    } else {
+        pval = pnorm(-z);                                                                                 
+    }
+    return(pval);
+}
+```
+
+```{r}
+sheets_OR = list('main_hdl' = main_hdl,
+                 'hdl_mr_df' = hdl_mr_df)
+write_xlsx(sheets_OR, path = paste0(output_path, 'main_HDL_0709.xlsx'))
+```
+
+# ================================
+## TC ~ Cognitive status
+## 1. Separate the full set into a subset that have complete exposure data (HDL)
+```{r Separate datasets, message=FALSE, warning=FALSE}
+# TC sample
+tc_sample = 
+  europ %>% 
+  dplyr::select(HHID, PN, AD_cat, TC) %>% 
+  drop_na() %>% 
+  left_join(europ)
+# N = 8,775
+```
+
+## 2. Clinical TC group and cognition
+### 1) Prepare datasets
+```{r}
+cind_normal = 
+  tc_sample %>% 
+  filter(AD_cat == "Normal" | AD_cat == "CIND") %>% 
+  mutate(AD_bin = case_when(
+    AD_cat == "Normal" ~ 0,
+    AD_cat == "CIND" ~ 1
+  ))
+# N = 8,580
+
+dementia_normal = 
+  tc_sample %>% 
+  filter(AD_cat == "Normal" | AD_cat == "Dementia") %>% 
+  mutate(AD_bin = case_when(
+    AD_cat == "Normal" ~ 0,
+    AD_cat == "Dementia" ~ 1
+  ))
+# N = 7,716
+```
+
+### 2) Name models and adjusted variables
+```{r}
+lst_model = c('CIND_crude', 'Dem_crude', 'CIND_adj1', 'Dem_adj1', 'full_crude', 'full_adj1')
+gene_adj_basic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+# Function for improvement Chi-square
+G_square = function(L_full, L_reduced) {
+  output = 2*(L_full - L_reduced)
+}
+```
+
+
+### 3) Regression models
+#### A. PGS TC and TC clinical level
+```{r message=FALSE, warning=FALSE}
+# Crude 
+crude = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+full_crude = glm(crude, data = tc_sample, family = 'binomial')
+
+# Adding in demographic variables
+f1 = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', gene_adj_basic))
+# Reduced model
+f_reduced = as.formula(paste('TC_clinic_bin ~ ', gene_adj_basic))
+
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+CIND_reduced = glm(f_reduced, data = cind_normal, family = 'binomial')
+cind_G = G_square(logLik(CIND_adj1)[1], logLik(CIND_reduced)[1])
+print(paste0("CIND: ", round(cind_G, 2)))
+
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+Dem_reduced = glm(f_reduced, data = dementia_normal, family = 'binomial')
+dementia_G = G_square(logLik(Dem_adj1)[1], logLik(Dem_reduced)[1])
+print(paste0("Dementia: ", round(dementia_G, 2)))
+
+full_adj1 = glm(f1, data = tc_sample, family = 'binomial')
+full_reduced = glm(f_reduced, data = tc_sample, family = 'binomial')
+full_G = G_square(logLik(full_adj1)[1], logLik(full_reduced)[1])
+print(paste0("Full: ", round(full_G, 2)))
+
+tc_pgs = make_OR_table(lst_model, 2, 'tc_pgs_')
+```
+
+#### B. TC group and Cognitive Status
+##### 1) Try ordinal logistic regression
+```{r}
+# fit ordered logit model and store results 'm'
+olm = polr(AD_cat ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid_cat + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E, data = europ, Hess = TRUE)
+# view a summary of the model
+summary(olm)
+```
+
+```{r}
+# Test for proportional odds assumption
+library(brant)
+brant(olm)
+```
+
+##### 2) Back to logistic regression
+```{r}
+lst_model = c('CIND_crude', 'Dem_crude', 'CIND_adj1', 'Dem_adj1', 'CIND_adj2', 'Dem_adj2', 'CIND_adj3', 'Dem_adj3')
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+```
+
+```{r HDL and Cognitive status, message=FALSE, warning=FALSE}
+# Crude 
+crude = as.formula(paste('AD_bin ~ ', 'TC_clinic_bin'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ TC_clinic_bin + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ TC_clinic_bin + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ TC_clinic_bin + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+tc_ad = make_OR_table(lst_model, 2, 'tc_ad_')
+```
+
+### C. Cognitive Status ~ TC PGS + TC clinical group
+##### 1) Total effect
+```{r message=FALSE, warning=FALSE}
+# Crude
+crude = as.formula(paste('AD_bin ~ ', 'PGS_TC'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ PGS_TC + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ PGS_TC + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ PGS_TC + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+tc_adpgs1_tot = make_OR_table(lst_model, 2, 'tc_adpgs1_t_')
+```
+
+##### 2) Direct effect
+```{r HDL PGS and Cognitive status, message=FALSE, warning=FALSE}
+# Crude
+crude = as.formula(paste('AD_bin ~ ', 'PGS_TC + TC_clinic_bin'))
+CIND_crude = glm(crude, data = cind_normal, family = 'binomial')
+Dem_crude = glm(crude, data = dementia_normal, family = 'binomial')
+# Adding in demographic variables
+f1 = as.formula(paste('AD_bin ~ PGS_TC + TC_clinic_bin + ', demographic))
+CIND_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+Dem_adj1 = glm(f1, data = dementia_normal, family = 'binomial')
+# Adding in health status variables
+f2 = as.formula(paste('AD_bin ~ PGS_TC + TC_clinic_bin + ', health_behavior))
+CIND_adj2 = glm(f2, data = cind_normal, family = 'binomial')
+Dem_adj2 = glm(f2, data = dementia_normal, family = 'binomial')
+# Adding in AD genetic variables
+f3 = as.formula(paste('AD_bin ~ PGS_TC + TC_clinic_bin + ', gene_add))
+CIND_adj3 = glm(f3, data = cind_normal, family = 'binomial')
+Dem_adj3 = glm(f3, data = dementia_normal, family = 'binomial')
+
+tc_adpgs1 = make_OR_table(lst_model, 2, 'tc_adpgs1_')
+tc_adpgs2 = make_OR_table(lst_model, 3, 'tc_adpgs2_')
+```
+
+```{r}
+main_tc = rbind(tc_pgs, tc_ad, tc_adpgs1_tot, tc_adpgs1, tc_adpgs2)
+```
+
+#### D. Mendelian Randomization
+```{r}
+pc_only = 'PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('AD_bin ~ ', 'PGS_TC'))
+
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('AD_bin ~ PGS_TC + ', demographic))
+f2_outcome = as.formula(paste('AD_bin ~ PGS_TC + ', health_behavior))
+f3_outcome = as.formula(paste('AD_bin ~ PGS_TC + ', gene_add))
+
+# CIND
+CIND_MR_1 = glm(f0_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_2 = glm(f0_outcome, data = cind_normal, family = 'binomial')
+CIND_crude_mr = get_MR_value(CIND_MR_1, CIND_MR_2, 'CIND_crude')
+
+CIND_MR_3 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_4 = glm(f1_outcome, data = cind_normal, family = 'binomial')
+CIND_adjust_mr = get_MR_value(CIND_MR_3, CIND_MR_4, 'CIND_adj')
+
+CIND_MR_5 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_6 = glm(f2_outcome, data = cind_normal, family = 'binomial')
+CIND_full_mr = get_MR_value(CIND_MR_5, CIND_MR_6, 'CIND_full')
+
+CIND_MR_7 = glm(f1_exposure, data = cind_normal, family = 'binomial')
+CIND_MR_8 = glm(f3_outcome, data = cind_normal, family = 'binomial')
+CIND_gene_mr = get_MR_value(CIND_MR_7, CIND_MR_8, 'CIND_gene')
+# Dementia
+Dem_MR_1 = glm(f0_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_2 = glm(f0_outcome, data = dementia_normal, family = 'binomial')
+Dem_crude_mr = get_MR_value(Dem_MR_1, Dem_MR_2, 'Dem_crude')
+
+Dem_MR_3 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_4 = glm(f1_outcome, data = dementia_normal, family = 'binomial')
+Dem_adjust_mr = get_MR_value(Dem_MR_3, Dem_MR_4, 'Dem_adj')
+
+Dem_MR_5 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_6 = glm(f2_outcome, data = dementia_normal, family = 'binomial')
+Dem_full_mr = get_MR_value(Dem_MR_5, Dem_MR_6, 'Dem_full')
+
+Dem_MR_7 = glm(f1_exposure, data = dementia_normal, family = 'binomial')
+Dem_MR_8 = glm(f3_outcome, data = dementia_normal, family = 'binomial')
+Dem_gene_mr = get_MR_value(Dem_MR_7, Dem_MR_8, 'Dem_gene')
+
+# Bind together
+tc_mr_bind = rbind(CIND_crude_mr, CIND_adjust_mr, CIND_full_mr, CIND_gene_mr,
+                Dem_crude_mr, Dem_adjust_mr, Dem_full_mr, Dem_gene_mr)
+tc_mr_df = as.data.frame(tc_mr_bind)
+colnames(tc_mr_df) = c('mark', 'estimate', '95% CI', 'OR', '95% CI_OR', 'p-value')
+```
+
+```{r}
+sheets_OR = list('main_tc' = main_tc,
+                 'tc_mr_df' = tc_mr_df)
+write_xlsx(sheets_OR, path = paste0(output_path, 'main_TC_0709.xlsx'))
+```
+
+#=================================
+# Part 4: Domain analysis
+## I. Check for sample size drop
+```{r}
+sum(!is.na(europ$im_recall))   # N = 0
+sum(!is.na(europ$dl_recall))   # N = 0
+sum(!is.na(europ$total_recall))   # N = 0
+sum(!is.na(europ$serial7))   # N = 0
+sum(!is.na(europ$backwc))   # N = 0
+sum(!is.na(europ$ms_total))   # N = 2,851
+sum(!is.na(europ$vocab))   # N = 5,509
+sum(!is.na(europ$cog_total))   # N = 2,851
+```
+
+## II. Regression analysis
+```{r}
+lst_model = c('im_recall_crude', 'dl_recall_crude', 'total_recall_crude', 'serial_crude', 'backwc_crude', 'vocab_crude', 'ms_total_crude', 'cog_total_crude',
+              'im_recall_adj1', 'dl_recall_adj1', 'total_recall_adj1', 'serial_adj1', 'backwc_adj1', 'vocab_adj1', 'ms_total_adj1', 'cog_total_adj1',
+              'im_recall_adj2', 'dl_recall_adj2', 'total_recall_adj2', 'serial_adj2', 'backwc_adj2', 'vocab_adj2', 'ms_total_adj2', 'cog_total_adj2',
+              'im_recall_adj3', 'dl_recall_adj3', 'total_recall_adj3', 'serial_adj3', 'backwc_adj3', 'vocab_adj3', 'ms_total_adj3', 'cog_total_adj3')
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+```
+
+### 1. HDL and domain cognition score
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ HDL_clinic, data = europ)
+dl_recall_crude = lm(dl_recall ~ HDL_clinic, data = europ)
+total_recall_crude = lm(total_recall ~ HDL_clinic, data = europ)
+serial_crude = lm(serial7 ~ HDL_clinic, data = europ)
+backwc_crude = lm(backwc ~ HDL_clinic, data = europ)
+vocab_crude = lm(vocab ~ HDL_clinic, data = europ)
+ms_total_crude = lm(ms_total ~ HDL_clinic, data = europ)
+cog_total_crude = lm(cog_total ~ HDL_clinic, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ HDL_clinic + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ HDL_clinic + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ HDL_clinic + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ HDL_clinic + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ HDL_clinic + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ HDL_clinic + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ HDL_clinic + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ HDL_clinic + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ HDL_clinic + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ HDL_clinic + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ HDL_clinic + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ HDL_clinic + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ HDL_clinic + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ HDL_clinic + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ HDL_clinic + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ HDL_clinic + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ HDL_clinic + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ HDL_clinic + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ HDL_clinic + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ HDL_clinic + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ HDL_clinic + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ HDL_clinic + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ HDL_clinic + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ HDL_clinic + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+hdl_cog = make_coeff_table_lm(lst_model, 2, 'hdl_cog_')
+```
+
+### 2. PGS HDL and domain cognition score -- adjusted for HDL level
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ HDL_clinic + PGS_HDL, data = europ)
+dl_recall_crude = lm(dl_recall ~ HDL_clinic + PGS_HDL, data = europ)
+total_recall_crude = lm(total_recall ~ HDL_clinic + PGS_HDL, data = europ)
+serial_crude = lm(serial7 ~ HDL_clinic + PGS_HDL, data = europ)
+backwc_crude = lm(backwc ~ HDL_clinic + PGS_HDL, data = europ)
+vocab_crude = lm(vocab ~ HDL_clinic + PGS_HDL, data = europ)
+ms_total_crude = lm(ms_total ~ HDL_clinic + PGS_HDL, data = europ)
+cog_total_crude = lm(cog_total ~ HDL_clinic + PGS_HDL, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ HDL_clinic + PGS_HDL + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ HDL_clinic + PGS_HDL + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ HDL_clinic + PGS_HDL + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ HDL_clinic + PGS_HDL + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ HDL_clinic + PGS_HDL + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ HDL_clinic + PGS_HDL + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ HDL_clinic + PGS_HDL + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ HDL_clinic + PGS_HDL + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ HDL_clinic + PGS_HDL + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ HDL_clinic + PGS_HDL + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ HDL_clinic + PGS_HDL + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ HDL_clinic + PGS_HDL + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ HDL_clinic + PGS_HDL + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ HDL_clinic + PGS_HDL + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ HDL_clinic + PGS_HDL + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ HDL_clinic + PGS_HDL + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ HDL_clinic + PGS_HDL + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ HDL_clinic + PGS_HDL + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ HDL_clinic + PGS_HDL + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ HDL_clinic + PGS_HDL + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ HDL_clinic + PGS_HDL + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ HDL_clinic + PGS_HDL + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ HDL_clinic + PGS_HDL + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ HDL_clinic + PGS_HDL + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+hdl_pgs1 = make_coeff_table_lm(lst_model, 2, 'hdl_pgs1_')
+hdl_pgs2 = make_coeff_table_lm(lst_model, 3, 'hdl_pgs2_')
+```
+
+### 3. PGS HDL and domain cognition score -- not adjusted for HDL level (total effect)
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ PGS_HDL, data = europ)
+dl_recall_crude = lm(dl_recall ~ PGS_HDL, data = europ)
+total_recall_crude = lm(total_recall ~ PGS_HDL, data = europ)
+serial_crude = lm(serial7 ~ PGS_HDL, data = europ)
+backwc_crude = lm(backwc ~ PGS_HDL, data = europ)
+vocab_crude = lm(vocab ~ PGS_HDL, data = europ)
+ms_total_crude = lm(ms_total ~ PGS_HDL, data = europ)
+cog_total_crude = lm(cog_total ~ PGS_HDL, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ PGS_HDL + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ PGS_HDL + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ PGS_HDL + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ PGS_HDL + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ PGS_HDL + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ PGS_HDL + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ PGS_HDL + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ PGS_HDL + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ PGS_HDL + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ PGS_HDL + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ PGS_HDL + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ PGS_HDL + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ PGS_HDL + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ PGS_HDL + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ PGS_HDL + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ PGS_HDL + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ PGS_HDL + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ PGS_HDL + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ PGS_HDL + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ PGS_HDL + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ PGS_HDL + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ PGS_HDL + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ PGS_HDL + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ PGS_HDL + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+hdl_pgs_total = make_coeff_table_lm(lst_model, 2, 'hdl_pgs_total_')
+```
+
+```{r}
+domain_hdl = rbind(hdl_cog, hdl_pgs1, hdl_pgs2, hdl_pgs_total)
+```
+
+### 4. TC and domain cognition score
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ TC_clinic_bin, data = europ)
+dl_recall_crude = lm(dl_recall ~ TC_clinic_bin, data = europ)
+total_recall_crude = lm(total_recall ~ TC_clinic_bin, data = europ)
+serial_crude = lm(serial7 ~ TC_clinic_bin, data = europ)
+backwc_crude = lm(backwc ~ TC_clinic_bin, data = europ)
+vocab_crude = lm(vocab ~ TC_clinic_bin, data = europ)
+ms_total_crude = lm(ms_total ~ TC_clinic_bin, data = europ)
+cog_total_crude = lm(cog_total ~ TC_clinic_bin, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ TC_clinic_bin + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ TC_clinic_bin + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ TC_clinic_bin + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ TC_clinic_bin + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ TC_clinic_bin + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ TC_clinic_bin + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ TC_clinic_bin + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ TC_clinic_bin + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ TC_clinic_bin + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ TC_clinic_bin + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ TC_clinic_bin + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ TC_clinic_bin + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ TC_clinic_bin + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ TC_clinic_bin + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ TC_clinic_bin + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ TC_clinic_bin + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ TC_clinic_bin + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ TC_clinic_bin + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ TC_clinic_bin + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ TC_clinic_bin + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ TC_clinic_bin + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ TC_clinic_bin + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ TC_clinic_bin + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ TC_clinic_bin + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+tc_cog = make_coeff_table_lm(lst_model, 2, 'tc_cog_')
+```
+
+### 5. PGS TC and domain cognition score -- adjusted for TC level
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ TC_clinic_bin + PGS_TC, data = europ)
+dl_recall_crude = lm(dl_recall ~ TC_clinic_bin + PGS_TC, data = europ)
+total_recall_crude = lm(total_recall ~ TC_clinic_bin + PGS_TC, data = europ)
+serial_crude = lm(serial7 ~ TC_clinic_bin + PGS_TC, data = europ)
+backwc_crude = lm(backwc ~ TC_clinic_bin + PGS_TC, data = europ)
+vocab_crude = lm(vocab ~ TC_clinic_bin + PGS_TC, data = europ)
+ms_total_crude = lm(ms_total ~ TC_clinic_bin + PGS_TC, data = europ)
+cog_total_crude = lm(cog_total ~ TC_clinic_bin + PGS_TC, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ TC_clinic_bin + PGS_TC + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ TC_clinic_bin + PGS_TC + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ TC_clinic_bin + PGS_TC + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ TC_clinic_bin + PGS_TC + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ TC_clinic_bin + PGS_TC + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ TC_clinic_bin + PGS_TC + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ TC_clinic_bin + PGS_TC + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ TC_clinic_bin + PGS_TC + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ TC_clinic_bin + PGS_TC + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ TC_clinic_bin + PGS_TC + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ TC_clinic_bin + PGS_TC + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ TC_clinic_bin + PGS_TC + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ TC_clinic_bin + PGS_TC + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ TC_clinic_bin + PGS_TC + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ TC_clinic_bin + PGS_TC + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ TC_clinic_bin + PGS_TC + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ TC_clinic_bin + PGS_TC + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+tc_pgs1 = make_coeff_table_lm(lst_model, 2, 'tc_pgs1_')
+tc_pgs2 = make_coeff_table_lm(lst_model, 3, 'tc_pgs2_')
+```
+
+### 6. PGS TC and domain cognition score -- not adjusted for TC level (total effect)
+```{r domain, message=FALSE, warning=FALSE}
+## Crude
+im_recall_crude = lm(im_recall ~ PGS_TC, data = europ)
+dl_recall_crude = lm(dl_recall ~ PGS_TC, data = europ)
+total_recall_crude = lm(total_recall ~ PGS_TC, data = europ)
+serial_crude = lm(serial7 ~ PGS_TC, data = europ)
+backwc_crude = lm(backwc ~ PGS_TC, data = europ)
+vocab_crude = lm(vocab ~ PGS_TC, data = europ)
+ms_total_crude = lm(ms_total ~ PGS_TC, data = europ)
+cog_total_crude = lm(cog_total ~ PGS_TC, data = europ)
+
+# Adding in demographic
+f1 = as.formula(paste('im_recall ~ PGS_TC + ', demographic))
+im_recall_adj1 = lm(f1, data = europ)
+f2 = as.formula(paste('dl_recall ~ PGS_TC + ', demographic))
+dl_recall_adj1 = lm(f2, data = europ)
+f3 = as.formula(paste('total_recall ~ PGS_TC + ', demographic))
+total_recall_adj1 = lm(f3, data = europ)
+f4 = as.formula(paste('serial7 ~ PGS_TC + ', demographic))
+serial_adj1 = lm(f4, data = europ)
+f5 = as.formula(paste('backwc ~ PGS_TC + ', demographic))
+backwc_adj1 = lm(f5, data = europ)
+f6 = as.formula(paste('vocab ~ PGS_TC + ', demographic))
+vocab_adj1 = lm(f6, data = europ)
+f7 = as.formula(paste('ms_total ~ PGS_TC + ', demographic))
+ms_total_adj1 = lm(f7, data = europ)
+f8 = as.formula(paste('cog_total ~ PGS_TC + ', demographic))
+cog_total_adj1 = lm(f8, data = europ)
+
+# Adding in health status
+f11 = as.formula(paste('im_recall ~ PGS_TC + ', health_behavior))
+im_recall_adj2 = lm(f11, data = europ)
+f21 = as.formula(paste('dl_recall ~ PGS_TC + ', health_behavior))
+dl_recall_adj2 = lm(f21, data = europ)
+f31 = as.formula(paste('total_recall ~ PGS_TC + ', health_behavior))
+total_recall_adj2 = lm(f31, data = europ)
+f41 = as.formula(paste('serial7 ~ PGS_TC + ', health_behavior))
+serial_adj2 = lm(f41, data = europ)
+f51 = as.formula(paste('backwc ~ PGS_TC + ', health_behavior))
+backwc_adj2 = lm(f51, data = europ)
+f61 = as.formula(paste('vocab ~ PGS_TC + ', health_behavior))
+vocab_adj2 = lm(f61, data = europ)
+f71 = as.formula(paste('ms_total ~ PGS_TC + ', health_behavior))
+ms_total_adj2 = lm(f71, data = europ)
+f81 = as.formula(paste('cog_total ~ PGS_TC + ', health_behavior))
+cog_total_adj2 = lm(f81, data = europ)
+
+# Adding in AD genetics
+f111 = as.formula(paste('im_recall ~ PGS_TC + ', gene_add))
+im_recall_adj3 = lm(f111, data = europ)
+f211 = as.formula(paste('dl_recall ~ PGS_TC + ', gene_add))
+dl_recall_adj3 = lm(f211, data = europ)
+f311 = as.formula(paste('total_recall ~ PGS_TC + ', gene_add))
+total_recall_adj3 = lm(f311, data = europ)
+f411 = as.formula(paste('serial7 ~ PGS_TC + ', gene_add))
+serial_adj3 = lm(f411, data = europ)
+f511 = as.formula(paste('backwc ~ PGS_TC + ', gene_add))
+backwc_adj3 = lm(f511, data = europ)
+f611 = as.formula(paste('vocab ~ PGS_TC + ', gene_add))
+vocab_adj3 = lm(f611, data = europ)
+f711 = as.formula(paste('ms_total ~ PGS_TC + ', gene_add))
+ms_total_adj3 = lm(f711, data = europ)
+f811 = as.formula(paste('cog_total ~ PGS_TC + ', gene_add))
+cog_total_adj3 = lm(f811, data = europ)
+
+tc_pgs_total = make_coeff_table_lm(lst_model, 2, 'tc_pgs_total_')
+```
+
+### 5. Write to an Excel file
+```{r}
+domain_tc = rbind(tc_cog, tc_pgs1, tc_pgs2, tc_pgs_total)
+domain_together = rbind(domain_hdl, domain_tc)
+sheets_OR = list('domain_together' = domain_together)
+write_xlsx(sheets_OR, path = paste0(output_path, 'domain_together.xlsx'))
+```
+
+### 6. Mendelian Randomization
+#### Build models
+```{r}
+pc_only = 'PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+demographic = 'age + sex + education + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+health_behavior = paste0(demographic, ' + stroke + BMI + HTN + diabetes + smoking_cat + drink')
+gene_add = paste0(health_behavior, ' + APOE2010_bin + PGS_GENCOG')
+
+#========== HDL ===============
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('im_recall ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('im_recall ~ PGS_HDL + ', demographic))
+# MR models
+im_recall_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+im_recall_MR_2 = lm(f0_outcome, data = europ)
+im_recall_crude_mr = get_MR_value(im_recall_MR_1, im_recall_MR_2, 'im_recall_crude')
+im_recall_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+im_recall_MR_4 = lm(f1_outcome, data = europ)
+im_recall_adjust_mr = get_MR_value(im_recall_MR_3, im_recall_MR_4, 'im_recall_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('dl_recall ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('dl_recall ~ PGS_HDL + ', demographic))
+# MR models
+dl_recall_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+dl_recall_MR_2 = lm(f0_outcome, data = europ)
+dl_recall_crude_mr = get_MR_value(dl_recall_MR_1, dl_recall_MR_2, 'dl_recall_crude')
+dl_recall_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+dl_recall_MR_4 = lm(f1_outcome, data = europ)
+dl_recall_adjust_mr = get_MR_value(dl_recall_MR_3, dl_recall_MR_4, 'dl_recall_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('serial7 ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('serial7 ~ PGS_HDL + ', demographic))
+# MR models
+serial7_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+serial7_MR_2 = lm(f0_outcome, data = europ)
+serial7_crude_mr = get_MR_value(serial7_MR_1, serial7_MR_2, 'serial7_crude')
+serial7_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+serial7_MR_4 = lm(f1_outcome, data = europ)
+serial7_adjust_mr = get_MR_value(serial7_MR_3, serial7_MR_4, 'serial7_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('backwc ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('backwc ~ PGS_HDL + ', demographic))
+# MR models
+backwc_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+backwc_MR_2 = lm(f0_outcome, data = europ)
+backwc_crude_mr = get_MR_value(backwc_MR_1, backwc_MR_2, 'backwc_crude')
+backwc_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+backwc_MR_4 = lm(f1_outcome, data = europ)
+backwc_adjust_mr = get_MR_value(backwc_MR_3, backwc_MR_4, 'backwc_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('vocab ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('vocab ~ PGS_HDL + ', demographic))
+# MR models
+vocab_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+vocab_MR_2 = lm(f0_outcome, data = europ)
+vocab_crude_mr = get_MR_value(vocab_MR_1, vocab_MR_2, 'vocab_crude')
+vocab_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+vocab_MR_4 = lm(f1_outcome, data = europ)
+vocab_adjust_mr = get_MR_value(vocab_MR_3, vocab_MR_4, 'vocab_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('HDL_clinic ~ ', 'PGS_HDL'))
+f0_outcome = as.formula(paste('cog_total ~ ', 'PGS_HDL'))
+f1_exposure = as.formula(paste('HDL_clinic ~ PGS_HDL + ', demographic))
+f1_outcome = as.formula(paste('cog_total ~ PGS_HDL + ', demographic))
+# MR models
+cog_total_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+cog_total_MR_2 = lm(f0_outcome, data = europ)
+cog_total_crude_mr = get_MR_value(cog_total_MR_1, cog_total_MR_2, 'cog_total_crude')
+cog_total_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+cog_total_MR_4 = lm(f1_outcome, data = europ)
+cog_total_adjust_mr = get_MR_value(cog_total_MR_3, cog_total_MR_4, 'cog_total_adj')
+```
+
+```{r}
+hdl_mr_bind = rbind(im_recall_crude_mr, im_recall_adjust_mr, dl_recall_crude_mr, dl_recall_adjust_mr,
+                serial7_crude_mr, serial7_adjust_mr, backwc_crude_mr, backwc_adjust_mr,
+                vocab_crude_mr, vocab_adjust_mr, cog_total_crude_mr, cog_total_adjust_mr)
+hdl_mr_df = as.data.frame(hdl_mr_bind)
+colnames(hdl_mr_df) = c('mark', 'estimate', '95% CI', 'OR', '95% CI_OR', 'p-value')
+```
+
+```{r}
+#========== TC ===============
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('im_recall ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('im_recall ~ PGS_TC + ', demographic))
+# MR models
+im_recall_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+im_recall_MR_2 = lm(f0_outcome, data = europ)
+im_recall_crude_mr = get_MR_value(im_recall_MR_1, im_recall_MR_2, 'im_recall_crude')
+im_recall_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+im_recall_MR_4 = lm(f1_outcome, data = europ)
+im_recall_adjust_mr = get_MR_value(im_recall_MR_3, im_recall_MR_4, 'im_recall_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('dl_recall ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('dl_recall ~ PGS_TC + ', demographic))
+# MR models
+dl_recall_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+dl_recall_MR_2 = lm(f0_outcome, data = europ)
+dl_recall_crude_mr = get_MR_value(dl_recall_MR_1, dl_recall_MR_2, 'dl_recall_crude')
+dl_recall_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+dl_recall_MR_4 = lm(f1_outcome, data = europ)
+dl_recall_adjust_mr = get_MR_value(dl_recall_MR_3, dl_recall_MR_4, 'dl_recall_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('serial7 ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('serial7 ~ PGS_TC + ', demographic))
+# MR models
+serial7_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+serial7_MR_2 = lm(f0_outcome, data = europ)
+serial7_crude_mr = get_MR_value(serial7_MR_1, serial7_MR_2, 'serial7_crude')
+serial7_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+serial7_MR_4 = lm(f1_outcome, data = europ)
+serial7_adjust_mr = get_MR_value(serial7_MR_3, serial7_MR_4, 'serial7_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('backwc ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('backwc ~ PGS_TC + ', demographic))
+# MR models
+backwc_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+backwc_MR_2 = lm(f0_outcome, data = europ)
+backwc_crude_mr = get_MR_value(backwc_MR_1, backwc_MR_2, 'backwc_crude')
+backwc_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+backwc_MR_4 = lm(f1_outcome, data = europ)
+backwc_adjust_mr = get_MR_value(backwc_MR_3, backwc_MR_4, 'backwc_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('vocab ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('vocab ~ PGS_TC + ', demographic))
+# MR models
+vocab_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+vocab_MR_2 = lm(f0_outcome, data = europ)
+vocab_crude_mr = get_MR_value(vocab_MR_1, vocab_MR_2, 'vocab_crude')
+vocab_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+vocab_MR_4 = lm(f1_outcome, data = europ)
+vocab_adjust_mr = get_MR_value(vocab_MR_3, vocab_MR_4, 'vocab_adj')
+
+# List all formula
+f0_exposure = as.formula(paste('TC_clinic_bin ~ ', 'PGS_TC'))
+f0_outcome = as.formula(paste('cog_total ~ ', 'PGS_TC'))
+f1_exposure = as.formula(paste('TC_clinic_bin ~ PGS_TC + ', demographic))
+f1_outcome = as.formula(paste('cog_total ~ PGS_TC + ', demographic))
+# MR models
+cog_total_MR_1 = glm(f0_exposure, data = europ, family = 'binomial')
+cog_total_MR_2 = lm(f0_outcome, data = europ)
+cog_total_crude_mr = get_MR_value(cog_total_MR_1, cog_total_MR_2, 'cog_total_crude')
+cog_total_MR_3 = glm(f1_exposure, data = europ, family = 'binomial')
+cog_total_MR_4 = lm(f1_outcome, data = europ)
+cog_total_adjust_mr = get_MR_value(cog_total_MR_3, cog_total_MR_4, 'cog_total_adj')
+```
+
+```{r}
+tc_mr_bind = rbind(im_recall_crude_mr, im_recall_adjust_mr, dl_recall_crude_mr, dl_recall_adjust_mr,
+                serial7_crude_mr, serial7_adjust_mr, backwc_crude_mr, backwc_adjust_mr,
+                vocab_crude_mr, vocab_adjust_mr, cog_total_crude_mr, cog_total_adjust_mr)
+tc_mr_df = as.data.frame(tc_mr_bind)
+colnames(tc_mr_df) = c('mark', 'estimate', '95% CI', 'OR', '95% CI_OR', 'p-value')
+```
+
+```{r}
+sheets_OR = list('hdl_mr_df' = hdl_mr_df,
+                 'tc_mr_df' = tc_mr_df)
+write_xlsx(sheets_OR, path = paste0(output_path, 'domain_MR.xlsx'))
+```
+
+#### Calculate P for heterogeneity
+```{r}
+library(AER)
+# HDL
+print('==== HDL ====')
+print('Crude')
+im_recall_p = ivreg(im_recall ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(im_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('im_recall: ', sum_ivreg$diagnostics[11]))
+
+dl_recall_p = ivreg(dl_recall ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(dl_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('dl_recall: ', sum_ivreg$diagnostics[11]))
+
+serial7_p = ivreg(serial7 ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(serial7_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('serial7: ', sum_ivreg$diagnostics[11]))
+
+backwc_p = ivreg(backwc ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(backwc_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('backwc: ', sum_ivreg$diagnostics[11]))
+
+vocab_p = ivreg(vocab ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(vocab_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('vocab: ', sum_ivreg$diagnostics[11]))
+
+cog_total_p = ivreg(cog_total ~ HDL_clinic | PGS_HDL, data = europ)
+sum_ivreg = summary(cog_total_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('cog_total: ', sum_ivreg$diagnostics[11]))
+```
+
+```{r}
+print('==== HDL ====')
+print('Adjusted for demographics')
+im_recall_p = ivreg(im_recall ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(im_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('im_recall: ', sum_ivreg$diagnostics[11]))
+
+dl_recall_p = ivreg(dl_recall ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(dl_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('dl_recall: ', sum_ivreg$diagnostics[11]))
+
+serial7_p = ivreg(serial7 ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(serial7_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('serial7: ', sum_ivreg$diagnostics[11]))
+
+backwc_p = ivreg(backwc ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(backwc_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('backwc: ', sum_ivreg$diagnostics[11]))
+
+vocab_p = ivreg(vocab ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E| PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(vocab_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('vocab: ', sum_ivreg$diagnostics[11]))
+
+cog_total_p = ivreg(cog_total ~ HDL_clinic + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_HDL + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(cog_total_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('cog_total: ', sum_ivreg$diagnostics[11]))
+```
+
+
+```{r}
+# TC
+print('==== TC ====')
+print('Crude')
+im_recall_p = ivreg(im_recall ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(im_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('im_recall: ', sum_ivreg$diagnostics[11]))
+
+dl_recall_p = ivreg(dl_recall ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(dl_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('dl_recall: ', sum_ivreg$diagnostics[11]))
+
+serial7_p = ivreg(serial7 ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(serial7_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('serial7: ', sum_ivreg$diagnostics[11]))
+
+backwc_p = ivreg(backwc ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(backwc_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('backwc: ', sum_ivreg$diagnostics[11]))
+
+vocab_p = ivreg(vocab ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(vocab_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('vocab: ', sum_ivreg$diagnostics[11]))
+
+cog_total_p = ivreg(cog_total ~ TC_clinic_bin | PGS_TC, data = europ)
+sum_ivreg = summary(cog_total_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('cog_total: ', sum_ivreg$diagnostics[11]))
+```
+
+```{r}
+print('==== TC ====')
+print('Adjusted for demographics')
+im_recall_p = ivreg(im_recall ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(im_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('im_recall: ', sum_ivreg$diagnostics[11]))
+
+dl_recall_p = ivreg(dl_recall ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(dl_recall_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('dl_recall: ', sum_ivreg$diagnostics[11]))
+
+serial7_p = ivreg(serial7 ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(serial7_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('serial7: ', sum_ivreg$diagnostics[11]))
+
+backwc_p = ivreg(backwc ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(backwc_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('backwc: ', sum_ivreg$diagnostics[11]))
+
+vocab_p = ivreg(vocab ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E| PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(vocab_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('vocab: ', sum_ivreg$diagnostics[11]))
+
+cog_total_p = ivreg(cog_total ~ TC_clinic_bin + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E | PGS_TC + age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E , data = europ)
+sum_ivreg = summary(cog_total_p, vcov = sandwich, df = Inf, diagnostics = TRUE)
+print(paste0('cog_total: ', sum_ivreg$diagnostics[11]))
+```
+
+# ==================================
+# Part 5: Population attributable fraction (PAF)
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(AF)
+source(paste0(source_path, "AFglm_MF.R"))
+```
+
+## 1. HDL PGS on HDL level
+```{r}
+library(gtools)
+
+hdl_paf = 
+  europ %>% 
+  mutate(HDL_PGS_qt = quantcut(PGS_HDL, q = 5, na.rm = T)) %>% 
+  mutate(HDL_PGS_low = case_when(
+    HDL_PGS_qt == "[-4.47,-0.849]" ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(HDL_PGS_high = case_when(
+    HDL_PGS_qt == "(0.828,3.75]" ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  filter(HDL_PGS_high == 1 | HDL_PGS_low == 1)
+# N = 3,513
+
+gene_adj_basic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+
+# Crude
+NC_crude = glm(HDL_clinic ~ HDL_PGS_high, data = hdl_paf, family = 'binomial')
+crude_pgs = AFglm_mf(object = NC_crude, data = hdl_paf, exposure = "HDL_PGS_high")
+
+# Adjusted Model 1
+f1 = as.formula(paste('HDL_clinic ~ HDL_PGS_high + ', gene_adj_basic))
+NC_adj1 = glm(f1, data = hdl_paf, family = 'binomial')
+adj_pgs = AFglm_mf(object = NC_adj1, data = hdl_paf, exposure = "HDL_PGS_high")
+
+PAF_PGS = rbind(extract_AF(crude_pgs, 'crude_pgs'), extract_AF(adj_pgs, 'adj_pgs'))
+```
+
+## 2. TC PGS on TC level
+```{r}
+tc_paf = 
+  europ %>% 
+  mutate(TC_PGS_qt = quantcut(PGS_TC, q = 5, na.rm = T)) %>% 
+  mutate(TC_PGS_low = case_when(
+    TC_PGS_qt == "[-3.59,-0.838]" ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(TC_PGS_high = case_when(
+    TC_PGS_qt == "(0.829,3.59]" ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  filter(TC_PGS_high == 1 | TC_PGS_low == 1)
+# N = 3,513
+
+gene_adj_basic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+
+# Crude
+NC_crude = glm(TC_clinic_bin ~ TC_PGS_high, data = tc_paf, family = 'binomial')
+crude_pgs = AFglm_mf(object = NC_crude, data = tc_paf, exposure = "TC_PGS_high")
+
+# Adjusted Model 1
+f1 = as.formula(paste('TC_clinic_bin ~ TC_PGS_high + ', gene_adj_basic))
+NC_adj1 = glm(f1, data = tc_paf, family = 'binomial')
+adj_pgs = AFglm_mf(object = NC_adj1, data = tc_paf, exposure = "TC_PGS_high")
+
+PAF_PGS_TC = rbind(extract_AF(crude_pgs, 'crude_pgs'), extract_AF(adj_pgs, 'adj_pgs'))
+```
+
+## 3. HDL on odds of CIND
+```{r}
+demographic = 'age + sex + education + wave_adj + med_lipid + PC1_5A + PC1_5B + PC1_5C + PC1_5D + PC1_5E'
+
+# Crude
+CC_crude = glm(formula = AD_bin ~ HDL_clinic, data = cind_normal, family = 'binomial')
+crude_smk = AFglm_mf(object = CC_crude, data = cind_normal, exposure = "HDL_clinic")
+
+# Adjusted Model 1
+f1 = as.formula(paste('AD_bin ~ HDL_clinic + ', demographic))
+CC_adj1 = glm(f1, data = cind_normal, family = 'binomial')
+adj_smk = AFglm_mf(object = CC_adj1, data = cind_normal, exposure = "HDL_clinic")
+
+PAF_CC_HDL = rbind(extract_AF(crude_smk, 'crude_smk'), extract_AF(adj_smk, 'adj_smk'))
+```
+

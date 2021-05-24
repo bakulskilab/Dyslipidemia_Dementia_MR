@@ -1,0 +1,618 @@
+---
+title: "prevalent_data_cleaning_1015"
+author: "Mingzhou_Fu"
+date: "10/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Basic setups, message=FALSE, warning=FALSE}
+rm(list = ls())
+library(tidyverse)
+library(writexl)
+library(haven)   # read in SAS file
+library(compareGroups)
+
+raw_data_path = '/Users/Mingzhou/Desktop/AD_Grant/HRS_raw/'
+work_data_path = '/Users/Mingzhou/Desktop/AD_Grant/Cholesterol/data/'
+output_path = '/Users/Mingzhou/Desktop/AD_Grant/Cholesterol/output/prevalent/'
+
+# Original dataset
+raw_dataset = 'hrs_democoggen_wide20190813.Rda'
+load(paste0(raw_data_path, raw_dataset)) # -- N = 43,232
+# Biomarkers
+load(paste0(raw_data_path, "biomk06bl_r.rda"))
+load(paste0(raw_data_path, "biomk08bl_r.rda"))
+load(paste0(raw_data_path, "biomk10bl_r.rda"))
+load(paste0(raw_data_path, "biomk12bl_r.rda"))
+# Medication variables
+load(paste0(raw_data_path, "h06n_r.rda"))
+load(paste0(raw_data_path, "h08n_r.rda"))
+load(paste0(raw_data_path, "h10n_r.rda"))
+load(paste0(raw_data_path, "h12n_r.rda"))
+# Physical activity variables
+load(paste0(raw_data_path, "h06c_r.rda"))
+load(paste0(raw_data_path, "h08c_r.rda"))
+load(paste0(raw_data_path, "h10c_r.rda"))
+load(paste0(raw_data_path, "h12c_r.rda"))
+# Cognition plus
+load(paste0(raw_data_path, "cogimp9216a_r.rda"))
+# Kunkle PGS
+load(paste0(raw_data_path, "european_kunkle_pgss.rda"))
+load(paste0(raw_data_path, "african_kunkle_pgss.rda"))
+```
+
+# Combine all data together
+```{r Join all the data, message=FALSE, warning=FALSE}
+med06 = 
+  med06 %>% 
+  dplyr::select(HHID, PN, KN360)
+med08 = 
+  med08 %>% 
+  dplyr::select(HHID, PN, LN360)
+med10 = 
+  med10 %>% 
+  dplyr::select(HHID, PN, MN360)
+med12 = 
+  med12 %>% 
+  dplyr::select(HHID, PN, NN360)
+
+# Join all the waves together, restrict to 2010, 2012, 2014 -- N = 24,916
+pre_full_data = 
+  hrs %>% 
+  left_join(biomk06, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(biomk08, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(biomk10, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(biomk12, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(med06, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(med08, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(med10, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(med12, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(h06c_r, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  mutate(KC223 = replace(KC223, KC223 == 8 | KC223 == 9, NA)) %>% 
+  mutate(KC224 = replace(KC224, KC224 == 8 | KC224 == 9, NA)) %>% 
+  mutate(KC225 = replace(KC225, KC225 == 8 | KC225 == 9, NA)) %>% 
+  mutate(vigorous_06 = case_when(
+    KC223 == 7 ~ 5,
+    KC223 == 1 ~ 4,
+    KC223 == 2 ~ 3,
+    KC223 == 3 ~ 2,
+    KC223 == 4 ~ 1
+  )) %>% 
+  mutate(moderate_06 = case_when(
+    KC224 == 7 ~ 5,
+    KC224 == 1 ~ 4,
+    KC224 == 2 ~ 3,
+    KC224 == 3 ~ 2,
+    KC224 == 4 ~ 1
+  )) %>% 
+  mutate(mild_06 = case_when(
+    KC225 == 7 ~ 5,
+    KC225 == 1 ~ 4,
+    KC225 == 2 ~ 3,
+    KC225 == 3 ~ 2,
+    KC225 == 4 ~ 1
+  )) %>% 
+  mutate(exercise_06 = (vigorous_06 + moderate_06 + mild_06)/3) %>% 
+  left_join(h08c_r, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  mutate(LC223 = replace(LC223, LC223 == 8 | LC223 == 9, NA)) %>% 
+  mutate(LC224 = replace(LC224, LC224 == 8 | LC224 == 9, NA)) %>% 
+  mutate(LC225 = replace(LC225, LC225 == 8 | LC225 == 9, NA)) %>% 
+  mutate(vigorous_08 = case_when(
+    LC223 == 7 ~ 5,
+    LC223 == 1 ~ 4,
+    LC223 == 2 ~ 3,
+    LC223 == 3 ~ 2,
+    LC223 == 4 ~ 1
+  )) %>% 
+  mutate(moderate_08 = case_when(
+    LC224 == 7 ~ 5,
+    LC224 == 1 ~ 4,
+    LC224 == 2 ~ 3,
+    LC224 == 3 ~ 2,
+    LC224 == 4 ~ 1
+  )) %>% 
+  mutate(mild_08 = case_when(
+    LC225 == 7 ~ 5,
+    LC225 == 1 ~ 4,
+    LC225 == 2 ~ 3,
+    LC225 == 3 ~ 2,
+    LC225 == 4 ~ 1
+  )) %>% 
+  mutate(exercise_08 = (vigorous_08 + moderate_08 + mild_08)/3) %>% 
+  left_join(h10c_r, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  mutate(MC223 = replace(MC223, MC223 == 8 | MC223 == 9, NA)) %>% 
+  mutate(MC224 = replace(MC224, MC224 == 8 | MC224 == 9, NA)) %>% 
+  mutate(MC225 = replace(MC225, MC225 == 8 | MC225 == 9, NA)) %>% 
+  mutate(vigorous_10 = case_when(
+    MC223 == 7 ~ 5,
+    MC223 == 1 ~ 4,
+    MC223 == 2 ~ 3,
+    MC223 == 3 ~ 2,
+    MC223 == 4 ~ 1
+  )) %>% 
+  mutate(moderate_10 = case_when(
+    MC224 == 7 ~ 5,
+    MC224 == 1 ~ 4,
+    MC224 == 2 ~ 3,
+    MC224 == 3 ~ 2,
+    MC224 == 4 ~ 1
+  )) %>% 
+  mutate(mild_10 = case_when(
+    MC225 == 7 ~ 5,
+    MC225 == 1 ~ 4,
+    MC225 == 2 ~ 3,
+    MC225 == 3 ~ 2,
+    MC225 == 4 ~ 1
+  )) %>% 
+  mutate(exercise_10 = (vigorous_10 + moderate_10 + mild_10)/3) %>% 
+  left_join(h12c_r, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  mutate(NC223 = replace(NC223, NC223 == 8 | NC223 == 9, NA)) %>% 
+  mutate(NC224 = replace(NC224, NC224 == 8 | NC224 == 9, NA)) %>% 
+  mutate(NC225 = replace(NC225, NC225 == 8 | NC225 == 9, NA)) %>% 
+  mutate(vigorous_12 = case_when(
+    NC223 == 7 ~ 5,
+    NC223 == 1 ~ 4,
+    NC223 == 2 ~ 3,
+    NC223 == 3 ~ 2,
+    NC223 == 4 ~ 1
+  )) %>% 
+  mutate(moderate_12 = case_when(
+    NC224 == 7 ~ 5,
+    NC224 == 1 ~ 4,
+    NC224 == 2 ~ 3,
+    NC224 == 3 ~ 2,
+    NC224 == 4 ~ 1
+  )) %>% 
+  mutate(mild_12 = case_when(
+    NC225 == 7 ~ 5,
+    NC225 == 1 ~ 4,
+    NC225 == 2 ~ 3,
+    NC225 == 3 ~ 2,
+    NC225 == 4 ~ 1
+  )) %>% 
+  mutate(exercise_12 = (vigorous_12 + moderate_12 + mild_12)/3) %>% 
+  left_join(kunkle_europ, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  left_join(kunkle_afric, by = c('HHID' = 'HHID', 'PN' = 'PN'))
+# N = 43,232
+
+# Select potential useful variables
+pre_full_data = 
+  pre_full_data %>% 
+  mutate(PGS_AD_IGAP = case_when(
+    !is.na(AA_PGS3_AD_IGAP13) ~ AA_PGS3_AD_IGAP13,
+    !is.na(EA_PGS3_AD_IGAP13) ~ EA_PGS3_AD_IGAP13
+  )) %>% 
+  mutate(PGS_AD_Kunkle = case_when(
+    !is.na(AAPH13_KunkleNAPOE_PT_1) ~ AAPH13_KunkleNAPOE_PT_1,
+    !is.na(EAPH13_KunkleNAPOE_PT_1) ~ EAPH13_KunkleNAPOE_PT_1
+  )) %>% 
+  mutate(gen_ancestry = case_when(
+    !is.na(AA_PGS3_HDL_GLGC13) ~ "African",
+    !is.na(EA_PGS3_HDL_GLGC13) ~ "European")) %>% 
+  # combine all PGS regardless of ancestry
+  mutate(PGS_HDL = case_when(
+    !is.na(AA_PGS3_HDL_GLGC13) ~ AA_PGS3_HDL_GLGC13,
+    !is.na(EA_PGS3_HDL_GLGC13) ~ EA_PGS3_HDL_GLGC13
+  )) %>% 
+  mutate(PGS_TC = case_when(
+    !is.na(AA_PGS3_TC_GLGC13) ~ AA_PGS3_TC_GLGC13,
+    !is.na(EA_PGS3_TC_GLGC13) ~ EA_PGS3_TC_GLGC13
+  )) %>% 
+  mutate(PC1_5A = case_when(
+    gen_ancestry == "European" ~ eaPC1_5A,
+    gen_ancestry == "African" ~ AAPC1_5A
+  )) %>% 
+  mutate(PC1_5B = case_when(
+    gen_ancestry == "European" ~ eaPC1_5B,
+    gen_ancestry == "African" ~ AAPC1_5B
+  )) %>% 
+  mutate(PC1_5C = case_when(
+    gen_ancestry == "European" ~ eaPC1_5C,
+    gen_ancestry == "African" ~ AAPC1_5C
+  )) %>% 
+  mutate(PC1_5D = case_when(
+    gen_ancestry == "European" ~ eaPC1_5D,
+    gen_ancestry == "African" ~ AAPC1_5D
+  )) %>% 
+  mutate(PC1_5E = case_when(
+    gen_ancestry == "European" ~ eaPC1_5E,
+    gen_ancestry == "African" ~ AAPC1_5E
+  )) %>% 
+   # complete dbs: no missing in baseline DBS HDL/TC
+  mutate(dbs_2006 = case_when(
+    (!is.na(KHDL_ADJ) | !is.na(KTC_ADJ)) ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(dbs_2008 = case_when(
+    (!is.na(LHDL_ADJ) | !is.na(LTC_ADJ)) ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(dbs_2010 = case_when(
+    (!is.na(MHDL_ADJ) | !is.na(MTC_ADJ)) ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(dbs_2012 = case_when(
+    (!is.na(NHDL_ADJ) | !is.na(NTC_ADJ)) ~ 1,
+    TRUE ~ 0
+  )) %>% 
+  mutate(PGS_GENCOG = case_when(
+    !is.na(AA_PGS3_GENCOG_CHRG15) ~ AA_PGS3_GENCOG_CHRG15,
+    !is.na(EA_PGS3_GENCOG_CHRG15) ~ EA_PGS3_GENCOG_CHRG15
+  )) %>% 
+  dplyr::select(HHID, PN, STUDY, AD04, AD06, AD08, AD10, AD12, AD14, STROKE06, STROKE08, STROKE10, STROKE12, 
+                PGS_HDL, PGS_TC, PGS_AD_IGAP, PGS_AD_Kunkle, PGS_GENCOG, 
+                KHDL_ADJ, LHDL_ADJ, MHDL_ADJ, NHDL_ADJ, KTC_ADJ, LTC_ADJ, MTC_ADJ, NTC_ADJ, 
+                gen_ancestry, BIRTHYR, GENDER, SCHLYRS, BEALE2003_06, BEALE2003_08, BEALE2003_10, BEALE2003_12, APOE2010_bin, 
+                PC1_5A, PC1_5B, PC1_5C, PC1_5D, PC1_5E, dbs_2006, dbs_2008, dbs_2010, dbs_2012, 
+                # HTN 
+                R8HIBPE, R9HIBPE, R10HIBPE, R11HIBPE, 
+                # Diabetes
+                R8DIABE, R9DIABE, R10DIABE, R11DIABE, 
+                # BMI
+                R8BMI, R9BMI, R10BMI, R11BMI, 
+                # Smoking status
+                smoke06, smoke08, smoke10, smoke12, 
+                # Alcohol
+                R8DRINK, R9DRINK, R10DRINK, R11DRINK, 
+                # medication
+                KN360, LN360, MN360, NN360, 
+                # Physical activity
+                exercise_06, exercise_08, exercise_10, exercise_12,
+                # Proxy level
+                KA009, LA009, MA009, NA009)
+# N = 43,232
+```
+
+# Wave selection
+```{r Wave selection, message=FALSE, warning=FALSE}
+# Filter observations have at least one DBS data -- N = 18,700
+dbs_full = 
+  pre_full_data %>% 
+  dplyr::filter(dbs_2006 == 1 | dbs_2008 == 1 | dbs_2010 == 1 | dbs_2012 == 1) 
+```
+
+# Recode some of the variables
+```{r}
+full_sample = 
+  dbs_full %>% 
+  mutate(wave_adj = case_when(
+    dbs_2006 == 1 ~ '2006',
+    dbs_2008 == 1 ~ '2008',
+    dbs_2010 == 1 ~ '2010', 
+    dbs_2012 == 1 ~ '2012'
+  )) %>% 
+  mutate(AD = case_when(
+    wave_adj == '2006' ~ AD06,
+    wave_adj == '2008' ~ AD08,
+    wave_adj == '2010' ~ AD10,
+    wave_adj == '2012' ~ AD12
+  )) %>% 
+  mutate(AD_former = case_when(
+    wave_adj == '2006' ~ AD04,
+    wave_adj == '2008' ~ AD06,
+    wave_adj == '2010' ~ AD08,
+    wave_adj == '2012' ~ AD10
+  )) %>% 
+  mutate(HDL = case_when(
+    wave_adj == '2006' ~ KHDL_ADJ,
+    wave_adj == '2008' ~ LHDL_ADJ,
+    wave_adj == '2010' ~ MHDL_ADJ,
+    wave_adj == '2012' ~ NHDL_ADJ
+  )) %>% 
+  mutate(TC = case_when(
+    wave_adj == '2006' ~ KTC_ADJ,
+    wave_adj == '2008' ~ LTC_ADJ,
+    wave_adj == '2010' ~ MTC_ADJ,
+    wave_adj == '2012' ~ NTC_ADJ
+  )) %>% 
+  mutate(age = case_when(
+    wave_adj == '2006' ~ 2006 - BIRTHYR,
+    wave_adj == '2008' ~ 2008 - BIRTHYR,
+    wave_adj == '2010' ~ 2010 - BIRTHYR,
+    wave_adj == '2012' ~ 2012 - BIRTHYR
+  )) %>% 
+  mutate(sex = GENDER - 1) %>% 
+  mutate(living = case_when(
+    wave_adj == '2006' ~ BEALE2003_06,
+    wave_adj == '2008' ~ BEALE2003_08,
+    wave_adj == '2010' ~ BEALE2003_10,
+    wave_adj == '2012' ~ BEALE2003_12
+  )) %>% 
+  mutate(education = SCHLYRS) %>% 
+  mutate(stroke = case_when(
+    wave_adj == '2006' ~ STROKE06,
+    wave_adj == '2008' ~ STROKE08,
+    wave_adj == '2010' ~ STROKE10,
+    wave_adj == '2012' ~ STROKE12
+  )) %>% 
+  mutate(med = case_when(
+    wave_adj == '2006' ~ KN360,
+    wave_adj == '2008' ~ LN360,
+    wave_adj == '2010' ~ MN360,
+    wave_adj == '2012' ~ NN360
+  )) %>% 
+  mutate(med_lipid_cat = case_when(
+    med == 1 ~ "Yes",
+    med == 5 ~ "No"
+  )) %>% 
+  mutate(HTN = case_when(
+    wave_adj == '2006' ~ R8HIBPE,
+    wave_adj == '2008' ~ R9HIBPE,
+    wave_adj == '2010' ~ R10HIBPE,
+    wave_adj == '2012' ~ R11HIBPE
+  )) %>% 
+  mutate(diabetes = case_when(
+    wave_adj == '2006' ~ R8DIABE,
+    wave_adj == '2008' ~ R9DIABE,
+    wave_adj == '2010' ~ R10DIABE,
+    wave_adj == '2012' ~ R11DIABE
+  )) %>% 
+  mutate(BMI = case_when(
+    wave_adj == '2006' ~ R8BMI,
+    wave_adj == '2008' ~ R9BMI,
+    wave_adj == '2010' ~ R10BMI,
+    wave_adj == '2012' ~ R11BMI
+  )) %>% 
+  mutate(smoke = case_when(
+    wave_adj == '2006' ~ smoke06,
+    wave_adj == '2008' ~ smoke08,
+    wave_adj == '2010' ~ smoke10,
+    wave_adj == '2012' ~ smoke12
+  )) %>% 
+  mutate(drink = case_when(
+    wave_adj == '2006' ~ R8DRINK,
+    wave_adj == '2008' ~ R9DRINK,
+    wave_adj == '2010' ~ R10DRINK,
+    wave_adj == '2012' ~ R11DRINK
+  )) %>% 
+  mutate(proxy = case_when(
+    wave_adj == '2006' ~ KA009,
+    wave_adj == '2008' ~ LA009,
+    wave_adj == '2010' ~ MA009,
+    wave_adj == '2012' ~ NA009
+  )) %>% 
+  mutate(exercise = case_when(
+    wave_adj == '2006' ~ exercise_06,
+    wave_adj == '2008' ~ exercise_08,
+    wave_adj == '2010' ~ exercise_10,
+    wave_adj == '2012' ~ exercise_12
+  )) %>% 
+  dplyr::select(HHID, PN, STUDY, AD, AD_former, HDL, TC, PGS_HDL, PGS_TC, PGS_AD_IGAP, PGS_AD_Kunkle, PGS_GENCOG, 
+                gen_ancestry, age, sex, living, education, stroke, wave_adj, APOE2010_bin, med_lipid_cat,
+                PC1_5A, PC1_5B, PC1_5C, PC1_5D, PC1_5E, HTN, diabetes, BMI, smoke, drink, proxy, exercise)
+
+# Make categorical variables
+full_sample = 
+  full_sample %>% 
+  mutate(AD_cat = case_when(
+    AD == 3 ~ "Normal",
+    AD == 2 ~ "CIND",
+    AD == 1 ~ "Dementia"
+  )) %>% 
+  mutate(AD = case_when(
+    AD_cat == "Normal" ~ 0,
+    AD_cat == "CIND" ~ 1,
+    AD_cat == "Dementia" ~ 2
+  )) %>% 
+  mutate(AD_cat_former = case_when(
+    AD_former == 3 ~ "Normal",
+    AD_former == 2 ~ "CIND",
+    AD_former == 1 ~ "Dementia"
+  )) %>% 
+  mutate(AD_former = case_when(
+    AD_cat_former == "Normal" ~ 0,
+    AD_cat_former == "CIND" ~ 1,
+    AD_cat_former == "Dementia" ~ 2
+  )) %>% 
+  mutate(sex_cat = case_when(
+    sex == 0 ~ "Male",
+    sex == 1 ~ "Female"
+  )) %>% 
+  mutate(living_cat = case_when(
+    living == 1 ~ "Urban",
+    living == 2 ~ "Suburban",
+    living == 3 ~ "Exurban"
+  )) %>% 
+  mutate(stroke_cat = case_when(
+    stroke == 1 ~ "Yes",
+    stroke == 0 ~ "No"
+  )) %>% 
+  mutate(APOE2010_cat = case_when(
+    APOE2010_bin == 0 ~ "No",
+    APOE2010_bin == 1 ~ "Yes"
+  )) %>% 
+  mutate(HTN_cat = case_when(
+    HTN == 0 ~ "No",
+    HTN == 1 ~ "Yes"
+  )) %>% 
+  mutate(diabetes_cat = case_when(
+    diabetes == 0 ~ "No",
+    diabetes == 1 ~ "Yes"
+  )) %>% 
+  mutate(smoking_cat = case_when(
+    smoke == 0 ~ "Never",
+    smoke == 1 ~ "Former",
+    smoke == 2 ~ "Current"
+  )) %>% 
+  mutate(drinking_cat = case_when(
+    drink == 0 ~ "Never",
+    drink == 1 ~ "Ever"
+  )) %>% 
+  mutate(med_lipid = case_when(
+    med_lipid_cat == "Yes" ~ 1,
+    med_lipid_cat == "No" ~ 0
+  )) %>% 
+  mutate(proxy_cat = case_when(
+    proxy == 1 ~ 'Self',
+    proxy == 2 | proxy == 3 | proxy == 4 ~ 'Proxy'
+  ))
+```
+
+# Insert the domain cognition data
+```{r Insert domain, message=FALSE, warning=FALSE}
+domain_cog = 
+  cognition_plus %>% 
+  dplyr::select(HHID, PN, 
+                R8IMRC, R9IMRC, R10IMRC, R11IMRC,    # immediate recall
+                R8DLRC, R9DLRC, R10DLRC, R11DLRC,    # delayed recall
+                R8SER7, R9SER7, R10SER7, R11SER7,    # serial's 7
+                R8BWC20, R9BWC20, R10BWC20, R11BWC20,   # backward counting from 20
+                R8VOCAB, R9VOCAB, R10VOCAB, R11VOCAB,    # vocabulary
+                R8TR20, R9TR20, R10TR20, R11TR20,    # total recall
+                R8MSTOT, R9MSTOT, R10MSTOT, R11MSTOT,   # Total mental status
+                R8COGTOT, R9COGTOT, R10COGTOT, R11COGTOT   # Total cognition
+                )
+
+domain_full = 
+  full_sample %>% 
+  left_join(domain_cog, by = c('HHID' = 'HHID', 'PN' = 'PN')) %>% 
+  mutate(im_recall = case_when(
+    wave_adj == "2012" ~ R11IMRC,
+    wave_adj == "2010" ~ R10IMRC,
+    wave_adj == "2008" ~ R9IMRC,
+    wave_adj == "2006" ~ R8IMRC
+  )) %>% 
+  mutate(dl_recall = case_when(
+    wave_adj == "2012" ~ R11DLRC,
+    wave_adj == "2010" ~ R10DLRC,
+    wave_adj == "2008" ~ R9DLRC,
+    wave_adj == "2006" ~ R8DLRC
+  )) %>% 
+  mutate(total_recall = case_when(
+    wave_adj == "2012" ~ R11TR20,
+    wave_adj == "2010" ~ R10TR20,
+    wave_adj == "2008" ~ R9TR20,
+    wave_adj == "2006" ~ R8TR20
+  )) %>% 
+  mutate(serial7 = case_when(
+    wave_adj == "2012" ~ R11SER7,
+    wave_adj == "2010" ~ R10SER7,
+    wave_adj == "2008" ~ R9SER7,
+    wave_adj == "2006" ~ R8SER7
+  )) %>% 
+  mutate(backwc = case_when(
+    wave_adj == "2012" ~ R11BWC20,
+    wave_adj == "2010" ~ R10BWC20,
+    wave_adj == "2008" ~ R9BWC20,
+    wave_adj == "2006" ~ R8BWC20
+  )) %>% 
+  mutate(vocab = case_when(
+    wave_adj == "2012" ~ R11VOCAB,
+    wave_adj == "2010" ~ R10VOCAB,
+    wave_adj == "2008" ~ R9VOCAB,
+    wave_adj == "2006" ~ R8VOCAB
+  )) %>% 
+  mutate(ms_total = case_when(
+    wave_adj == "2012" ~ R11MSTOT,
+    wave_adj == "2010" ~ R10MSTOT,
+    wave_adj == "2008" ~ R9MSTOT,
+    wave_adj == "2006" ~ R8MSTOT
+  )) %>% 
+  mutate(cog_total = case_when(
+    wave_adj == "2012" ~ R11COGTOT,
+    wave_adj == "2010" ~ R10COGTOT,
+    wave_adj == "2008" ~ R9COGTOT,
+    wave_adj == "2006" ~ R8COGTOT
+  )) %>% 
+  dplyr::select(-c(R8IMRC, R9IMRC, R10IMRC, R11IMRC, 
+                R8DLRC, R9DLRC, R10DLRC, R11DLRC, 
+                R8TR20, R9TR20, R10TR20, R11TR20, 
+                R8SER7, R9SER7, R10SER7, R11SER7, 
+                R8BWC20, R9BWC20, R10BWC20, R11BWC20, 
+                R8VOCAB, R9VOCAB, R10VOCAB, R11VOCAB, 
+                R8MSTOT, R9MSTOT, R10MSTOT, R11MSTOT, 
+                R8COGTOT, R9COGTOT, R10COGTOT, R11COGTOT))
+
+domain_full = 
+  domain_full %>% 
+  mutate(HDL_clinic = case_when(
+    HDL < 40 & sex_cat == 'Male' ~ 1,
+    HDL < 50 & sex_cat == 'Female' ~ 1,
+    !is.na(HDL) ~ 0
+  )) %>% 
+  mutate(TC_clinic = case_when(
+    TC >= 240 ~ 2,
+    TC >= 200 ~ 1,
+    !is.na(TC) ~ 0
+  )) %>% 
+  mutate(HDL_clinic_cat = case_when(
+    HDL_clinic == 1 ~ 'Risk',
+    HDL_clinic == 0 ~ 'Under'
+  )) %>% 
+  mutate(TC_clinic_cat = case_when(
+    TC_clinic == 2 ~ 'High',
+    TC_clinic == 1 ~ 'Boarderline',
+    TC_clinic == 0 ~ 'Good'
+  )) %>% 
+  mutate(TC_HDL_ratio = TC/HDL)
+
+save(domain_full, file = paste0(work_data_path, "prevalent_full.rda"))
+```
+
+
+# Sample selection
+```{r Sample selection steps, message=FALSE, warning=FALSE}
+# Get rid of those who don't have genetic data -- N = 14,064
+genetic_full = 
+  domain_full %>% 
+  dplyr::filter(!is.na(gen_ancestry))
+
+# Exclude those w/ missing values in age, sex, education, living, cohort, PC1_5A -- N = 11,362
+# Updated -- also excluded those w/ missing values in health behaviors: stroke, BMI, HTN, diabetes, smoking, drink status -- N = 11,173
+complete_data = 
+  genetic_full %>% 
+  dplyr::filter(!is.na(age) & !is.na(sex) & !is.na(education) & !is.na(wave_adj) & !is.na(PC1_5A) & !is.na(med_lipid_cat)) %>% 
+  dplyr::filter(!is.na(stroke) & !is.na(BMI) & !is.na(HTN) & !is.na(diabetes) & !is.na(smoking_cat) & !is.na(drink))
+
+# Restrict to people age <=90 to avoid survival bias -- N = 10,911
+age_restrict = 
+  complete_data %>% 
+  dplyr::filter(age <= 90 & age >= 50)
+
+# No reversed cognition -- N = 29
+reverse_sample_AD =
+  age_restrict %>% 
+  filter((AD_cat_former == "Dementia") & AD_cat == "Normal") 
+final_sample = 
+  age_restrict %>% 
+  anti_join(reverse_sample_AD, by = c('HHID' = 'HHID', 'PN' = 'PN'))
+# N = 10,882
+
+final_sample = 
+  final_sample %>% 
+  mutate(TC_clinic_bin = case_when(
+    TC_clinic_cat == 'Good' | TC_clinic_cat == 'Boarderline' ~ 0,
+    TC_clinic_cat == 'High' ~ 1
+  )) %>% 
+  mutate(TC_clinic_bin_cat = case_when(
+    TC_clinic_bin == 0 ~ "Good",
+    TC_clinic_bin == 1 ~ "High"
+  ))
+# N = 10,882
+# Exclude those in the AHEAD and CODA
+# study_restrict = 
+  # age_restrict %>% 
+  # filter(STUDY != 11 & STUDY != 21)
+```
+
+# Separate by Ancestry
+```{r Separate by ancestry, message=FALSE, warning=FALSE}
+europ =
+  final_sample %>% 
+  dplyr::filter(gen_ancestry == 'European')
+# N = 8,781
+afric = 
+  final_sample %>% 
+  dplyr::filter(gen_ancestry == 'African')
+# N = 2,101
+
+save(final_sample, file = paste0(work_data_path, "prevalent_eligible.rda"))
+save(europ, file = paste0(work_data_path, "prevalent_europ.rda"))
+save(afric, file = paste0(work_data_path, "prevalent_afric.rda"))
+```
+
+
